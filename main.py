@@ -49,7 +49,6 @@ class ConfigManager:
                 print(f"Error loading config: {e}. Using defaults.")
                 return self.default_config.copy()
         else:
-            
             self.save_config(self.default_config)
             return self.default_config.copy()
 
