@@ -563,7 +563,6 @@ class CyberBrowser(QMainWindow):
                 break
 
     def closeEvent(self, event):
-        # Save window dimensions
         self.config_manager.set("window_width", self.width())
         self.config_manager.set("window_height", self.height())
         super().closeEvent(event)
