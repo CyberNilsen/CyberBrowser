@@ -104,9 +104,7 @@ class SettingsDialog(QDialog):
         self.homepage_input.setPlaceholderText("Leave empty for default home page")
         form_layout.addRow("Homepage URL:", self.homepage_input)
         
-        self.tor_checkbox = QCheckBox()
-        self.tor_checkbox.setChecked(self.config_manager.get("enable_tor", False))
-        form_layout.addRow("Enable Tor (Experimental):", self.tor_checkbox)
+   
         
         layout.addLayout(form_layout)
         
