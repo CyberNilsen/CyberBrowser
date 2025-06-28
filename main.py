@@ -5,7 +5,7 @@ from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QWidget, QLabel, QPushButton,
     QVBoxLayout, QHBoxLayout, QLineEdit, QTabBar, QStackedLayout,
     QSizePolicy, QComboBox, QDialog, QFormLayout, QDialogButtonBox,
-    QMessageBox, QCheckBox
+    QMessageBox, QCheckBox, QFileDialog
 )
 from PyQt5.QtCore import Qt, QUrl
 from PyQt5.QtGui import QIcon, QPixmap
@@ -31,6 +31,7 @@ class ConfigManager:
             },
             "homepage_url": "",
             "enable_tor": False,
+            "tor_directory": "",
             "window_width": 1400,
             "window_height": 900
         }
@@ -75,6 +76,19 @@ class ConfigManager:
         
         return f"https://www.google.com/search?q={query.replace(' ', '+')}"
 
+    def is_tor_available(self):
+        """Check if Tor is available at the configured directory"""
+        tor_dir = self.get("tor_directory", "")
+        if not tor_dir:
+            return False
+        
+        tor_executables = ["tor", "tor.exe"]
+        for exe in tor_executables:
+            tor_path = os.path.join(tor_dir, exe)
+            if os.path.isfile(tor_path) and os.access(tor_path, os.X_OK):
+                return True
+        return False
+
 
 class SettingsDialog(QDialog):
     def __init__(self, config_manager, parent=None):
@@ -82,7 +96,7 @@ class SettingsDialog(QDialog):
         self.config_manager = config_manager
         self.setWindowTitle("Settings")
         self.setModal(True)
-        self.resize(400, 300)
+        self.resize(500, 400)
         self.init_ui()
 
     def init_ui(self):
@@ -104,7 +118,22 @@ class SettingsDialog(QDialog):
         self.homepage_input.setPlaceholderText("Leave empty for default home page")
         form_layout.addRow("Homepage URL:", self.homepage_input)
         
-   
+        tor_layout = QHBoxLayout()
+        self.tor_directory_input = QLineEdit()
+        self.tor_directory_input.setText(self.config_manager.get("tor_directory", ""))
+        self.tor_directory_input.setPlaceholderText("Path to Tor installation directory")
+        
+        tor_browse_btn = QPushButton("Browse")
+        tor_browse_btn.clicked.connect(self.browse_tor_directory)
+        
+        tor_layout.addWidget(self.tor_directory_input)
+        tor_layout.addWidget(tor_browse_btn)
+        
+        form_layout.addRow("Tor Directory:", tor_layout)
+        
+        self.tor_status_label = QLabel()
+        self.update_tor_status()
+        form_layout.addRow("Tor Status:", self.tor_status_label)
         
         layout.addLayout(form_layout)
         
@@ -112,6 +141,8 @@ class SettingsDialog(QDialog):
         button_box.accepted.connect(self.accept)
         button_box.rejected.connect(self.reject)
         layout.addWidget(button_box)
+        
+        self.tor_directory_input.textChanged.connect(self.update_tor_status)
         
         self.setStyleSheet("""
             QDialog {
@@ -162,11 +193,47 @@ class SettingsDialog(QDialog):
             }
         """)
 
+    def browse_tor_directory(self):
+        directory = QFileDialog.getExistingDirectory(
+            self, 
+            "Select Tor Installation Directory",
+            self.tor_directory_input.text()
+        )
+        if directory:
+            self.tor_directory_input.setText(directory)
+
+    def update_tor_status(self):
+        tor_dir = self.tor_directory_input.text().strip()
+        if not tor_dir:
+            self.tor_status_label.setText("No directory specified")
+            self.tor_status_label.setStyleSheet("color: #94a3b8;")
+            return
+        
+        if not os.path.exists(tor_dir):
+            self.tor_status_label.setText("Directory does not exist")
+            self.tor_status_label.setStyleSheet("color: #ef4444;")
+            return
+        
+        tor_executables = ["tor", "tor.exe"]
+        tor_found = False
+        for exe in tor_executables:
+            tor_path = os.path.join(tor_dir, exe)
+            if os.path.isfile(tor_path) and os.access(tor_path, os.X_OK):
+                tor_found = True
+                break
+        
+        if tor_found:
+            self.tor_status_label.setText("Tor executable found")
+            self.tor_status_label.setStyleSheet("color: #22c55e;")
+        else:
+            self.tor_status_label.setText("Tor executable not found")
+            self.tor_status_label.setStyleSheet("color: #ef4444;")
+
     def get_settings(self):
         return {
             "default_search_engine": self.search_engine_combo.currentText(),
             "homepage_url": self.homepage_input.text().strip(),
-            "enable_tor": self.tor_checkbox.isChecked()
+            "tor_directory": self.tor_directory_input.text().strip()
         }
 
 
@@ -240,6 +307,14 @@ class CyberBrowser(QMainWindow):
                 max-width: 100px;
                 padding: 6px 15px;
                 font-size: 13px;
+            }
+            QPushButton#tor_unavailable {
+                border-color: #ef4444;
+                color: #ef4444;
+            }
+            QPushButton#tor_unavailable:hover {
+                background-color: #ef4444;
+                color: white;
             }
             QComboBox {
                 background-color: #1e293b;
@@ -326,7 +401,7 @@ class CyberBrowser(QMainWindow):
             self.update_home_tabs()
 
     def update_home_tabs(self):
-        """Update search engine dropdowns in existing home tabs"""
+        """Update search engine dropdowns and Tor buttons in existing home tabs"""
         for tab_id, tab_info in self.tab_data.items():
             widget = tab_info['widget']
             if hasattr(widget, 'search_engine_combo') and hasattr(widget, 'tab_id'):
@@ -341,6 +416,25 @@ class CyberBrowser(QMainWindow):
                     widget.search_engine_combo.setCurrentText(default_engine)
                 elif current_text in search_engines:
                     widget.search_engine_combo.setCurrentText(current_text)
+                
+                if hasattr(widget, 'tor_btn'):
+                    self.update_tor_button(widget.tor_btn)
+
+    def update_tor_button(self, tor_btn):
+        """Update Tor button text and style based on current status"""
+        tor_enabled = self.config_manager.get("enable_tor", False)
+        tor_available = self.config_manager.is_tor_available()
+        
+        if not tor_available:
+            tor_btn.setText("Tor: Unavailable")
+            tor_btn.setObjectName("tor_unavailable")
+        else:
+            status = "Enabled" if tor_enabled else "Disabled"
+            tor_btn.setText(f"Tor: {status}")
+            tor_btn.setObjectName("")
+        
+        tor_btn.style().unpolish(tor_btn)
+        tor_btn.style().polish(tor_btn)
 
     def create_home_tab(self):
         tab_id = self.next_tab_id
@@ -408,8 +502,8 @@ class CyberBrowser(QMainWindow):
         start_btn = QPushButton("Start")
         start_btn.clicked.connect(lambda: self.perform_search(tab_id))
         
-        tor_status = "Enabled" if self.config_manager.get("enable_tor", False) else "Disabled"
-        tor_btn = QPushButton(f"Tor: {tor_status}")
+        tor_btn = QPushButton()
+        self.update_tor_button(tor_btn)
         tor_btn.clicked.connect(self.toggle_tor)
         
         buttons_layout.addWidget(start_btn)
@@ -430,6 +524,15 @@ class CyberBrowser(QMainWindow):
         return widget
 
     def toggle_tor(self):
+        if not self.config_manager.is_tor_available():
+            QMessageBox.warning(
+                self,
+                "Tor Unavailable",
+                "Tor is not available. Please configure the Tor directory in Settings.\n\n"
+                "You need to have Tor Browser or Tor installed and specify the correct directory path."
+            )
+            return
+        
         current_tor = self.config_manager.get("enable_tor", False)
         new_tor = not current_tor
         self.config_manager.set("enable_tor", new_tor)
@@ -437,8 +540,7 @@ class CyberBrowser(QMainWindow):
         for tab_id, tab_info in self.tab_data.items():
             widget = tab_info['widget']
             if hasattr(widget, 'tor_btn'):
-                status = "Enabled" if new_tor else "Disabled"
-                widget.tor_btn.setText(f"Tor: {status}")
+                self.update_tor_button(widget.tor_btn)
 
     def create_new_tab(self):
         new_tab_index = self.tab_bar.count() - 1
