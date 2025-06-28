@@ -1,18 +1,149 @@
 import sys
 import os
 import json
+import subprocess
+import time
+import threading
+import socket
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QWidget, QLabel, QPushButton,
     QVBoxLayout, QHBoxLayout, QLineEdit, QTabBar, QStackedLayout,
     QSizePolicy, QComboBox, QDialog, QFormLayout, QDialogButtonBox,
     QMessageBox, QCheckBox, QFileDialog
 )
-from PyQt5.QtCore import Qt, QUrl
+from PyQt5.QtCore import Qt, QUrl, pyqtSignal, QObject, QThread
 from PyQt5.QtGui import QIcon, QPixmap
-from PyQt5.QtWebEngineWidgets import QWebEngineView
+from PyQt5.QtWebEngineWidgets import QWebEngineView, QWebEngineProfile, QWebEnginePage
+from PyQt5.QtNetwork import QNetworkProxy, QNetworkProxyFactory
 
+# Set Chromium flags before QApplication is created
 os.environ['QT_LOGGING_RULES'] = 'qt.qpa.fonts.debug=false'
-os.environ['QTWEBENGINE_CHROMIUM_FLAGS'] = '--disable-web-security --disable-features=VizDisplayCompositor'
+
+
+class TorProxyFactory(QNetworkProxyFactory):
+    """Custom proxy factory for Tor"""
+    
+    def __init__(self, use_tor=False):
+        super().__init__()
+        self.use_tor = use_tor
+    
+    def queryProxy(self, query):
+        if self.use_tor:
+            proxy = QNetworkProxy()
+            proxy.setType(QNetworkProxy.Socks5Proxy)
+            proxy.setHostName("127.0.0.1")
+            proxy.setPort(9050)
+            return [proxy]
+        else:
+            return [QNetworkProxy(QNetworkProxy.NoProxy)]
+
+
+class TorManager(QObject):
+    """Manages Tor process and connection"""
+    tor_status_changed = pyqtSignal(bool, str)  # (is_running, status_message)
+    
+    def __init__(self, config_manager):
+        super().__init__()
+        self.config_manager = config_manager
+        self.tor_process = None
+        self.tor_port = 9050  # Default Tor SOCKS port
+        self.control_port = 9051  # Control port
+        self.is_running = False
+        
+    def start_tor(self):
+        """Start Tor process"""
+        if self.is_running:
+            return True
+            
+        tor_dir = self.config_manager.get("tor_directory", "")
+        if not tor_dir:
+            self.tor_status_changed.emit(False, "Tor directory not configured")
+            return False
+            
+        # Find Tor executable
+        tor_executable = None
+        for exe in ["tor", "tor.exe"]:
+            tor_path = os.path.join(tor_dir, exe)
+            if os.path.isfile(tor_path) and os.access(tor_path, os.X_OK):
+                tor_executable = tor_path
+                break
+                
+        if not tor_executable:
+            self.tor_status_changed.emit(False, "Tor executable not found")
+            return False
+            
+        try:
+            # Create Tor data directory
+            tor_data_dir = os.path.join(os.path.expanduser("~"), ".cyberbrowser_tor")
+            os.makedirs(tor_data_dir, exist_ok=True)
+            
+            # Start Tor with custom configuration
+            tor_config = [
+                tor_executable,
+                "--SocksPort", f"127.0.0.1:{self.tor_port}",
+                "--ControlPort", f"127.0.0.1:{self.control_port}",
+                "--DataDirectory", tor_data_dir,
+                "--Log", "notice stdout",
+                "--CookieAuthentication", "1",
+                "--ExitRelay", "0"
+            ]
+            
+            self.tor_process = subprocess.Popen(
+                tor_config,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0
+            )
+            
+            # Wait for Tor to start (check if SOCKS port is available)
+            if self._wait_for_tor_connection():
+                self.is_running = True
+                self.tor_status_changed.emit(True, "Tor is running")
+                return True
+            else:
+                self.stop_tor()
+                self.tor_status_changed.emit(False, "Tor failed to start")
+                return False
+                
+        except Exception as e:
+            self.tor_status_changed.emit(False, f"Failed to start Tor: {str(e)}")
+            return False
+            
+    def stop_tor(self):
+        """Stop Tor process"""
+        if self.tor_process:
+            try:
+                self.tor_process.terminate()
+                self.tor_process.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                self.tor_process.kill()
+            except Exception:
+                pass
+            finally:
+                self.tor_process = None
+                
+        self.is_running = False
+        self.tor_status_changed.emit(False, "Tor stopped")
+        
+    def _wait_for_tor_connection(self, timeout=30):
+        """Wait for Tor SOCKS proxy to become available"""
+        start_time = time.time()
+        while time.time() - start_time < timeout:
+            try:
+                sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                sock.settimeout(1)
+                result = sock.connect_ex(('127.0.0.1', self.tor_port))
+                sock.close()
+                if result == 0:
+                    return True
+            except Exception:
+                pass
+            time.sleep(1)
+        return False
+        
+    def is_tor_running(self):
+        """Check if Tor is currently running"""
+        return self.is_running and self.tor_process and self.tor_process.poll() is None
 
 
 class ConfigManager:
@@ -27,7 +158,9 @@ class ConfigManager:
                 "Yahoo": "https://search.yahoo.com/search?p={}",
                 "Yandex": "https://yandex.com/search/?text={}",
                 "Searx": "https://searx.org/search?q={}",
-                "Startpage": "https://www.startpage.com/sp/search?query={}"
+                "Startpage": "https://www.startpage.com/sp/search?query={}",
+                "DuckDuckGo Onion": "https://duckduckgogg42ts72.onion/?q={}",
+                "Ahmia Onion Search": "https://ahmia.fi/search/?q={}"
             },
             "homepage_url": "",
             "enable_tor": False,
@@ -90,6 +223,40 @@ class ConfigManager:
         return False
 
 
+class TorWebEngineProfile(QWebEngineProfile):
+    """Custom web engine profile that uses Tor proxy"""
+    
+    def __init__(self, tor_enabled=False, parent=None):
+        super().__init__(parent)
+        self.tor_enabled = tor_enabled
+        self.proxy_factory = None
+        self.setup_profile()
+        
+    def setup_profile(self):
+        if self.tor_enabled:
+            # Set up proxy factory
+            self.proxy_factory = TorProxyFactory(use_tor=True)
+            
+            # Set privacy-focused user agent
+            self.setHttpUserAgent("Mozilla/5.0 (Windows NT 10.0; rv:91.0) Gecko/20100101 Firefox/91.0")
+            
+            # Set additional privacy settings
+            self.setPersistentCookiesPolicy(QWebEngineProfile.NoPersistentCookies)
+            self.setHttpCacheType(QWebEngineProfile.MemoryHttpCache)
+            self.setHttpCacheMaximumSize(0)
+            
+            # Set proxy factory globally
+            QNetworkProxyFactory.setApplicationProxyFactory(self.proxy_factory)
+        else:
+            # Reset to default settings
+            self.setHttpUserAgent("")
+            self.setPersistentCookiesPolicy(QWebEngineProfile.AllowPersistentCookies)
+            self.setHttpCacheType(QWebEngineProfile.DiskHttpCache)
+            
+            # Reset proxy
+            QNetworkProxyFactory.setUseSystemConfiguration(True)
+
+
 class SettingsDialog(QDialog):
     def __init__(self, config_manager, parent=None):
         super().__init__(parent)
@@ -134,6 +301,16 @@ class SettingsDialog(QDialog):
         self.tor_status_label = QLabel()
         self.update_tor_status()
         form_layout.addRow("Tor Status:", self.tor_status_label)
+        
+        # Add Tor setup instructions
+        instructions = QLabel("Tor Setup Instructions:\n"
+                            "1. Download Tor Browser from torproject.org\n"
+                            "2. Extract it to a folder\n"
+                            "3. Browse to the 'Tor' folder inside the extracted directory\n"
+                            "4. Select the folder containing tor.exe (Windows) or tor (Linux/Mac)")
+        instructions.setWordWrap(True)
+        instructions.setStyleSheet("color: #94a3b8; font-size: 12px; padding: 10px; background-color: #1e293b; border-radius: 5px;")
+        form_layout.addRow("", instructions)
         
         layout.addLayout(form_layout)
         
@@ -241,8 +418,10 @@ class CyberBrowser(QMainWindow):
     def __init__(self):
         super().__init__()
         self.config_manager = ConfigManager()
+        self.tor_manager = TorManager(self.config_manager)
+        self.tor_manager.tor_status_changed.connect(self.on_tor_status_changed)
         
-        self.setWindowTitle("CyberBrowser")
+        self.setWindowTitle("CyberBrowser - Tor Ready")
         window_width = self.config_manager.get("window_width", 1400)
         window_height = self.config_manager.get("window_height", 900)
         self.resize(window_width, window_height)
@@ -256,6 +435,10 @@ class CyberBrowser(QMainWindow):
         self.tab_data = {}  
         self.next_tab_id = 0
         self.tab_id_mapping = {} 
+        
+        # Web engine profiles
+        self.normal_profile = QWebEngineProfile.defaultProfile()
+        self.tor_profile = None
 
         self.setStyleSheet("""
             QWidget {
@@ -314,6 +497,14 @@ class CyberBrowser(QMainWindow):
             }
             QPushButton#tor_unavailable:hover {
                 background-color: #ef4444;
+                color: white;
+            }
+            QPushButton#tor_enabled {
+                border-color: #22c55e;
+                color: #22c55e;
+            }
+            QPushButton#tor_enabled:hover {
+                background-color: #22c55e;
                 color: white;
             }
             QComboBox {
@@ -391,6 +582,15 @@ class CyberBrowser(QMainWindow):
 
         self.setCentralWidget(main_widget)
 
+    def on_tor_status_changed(self, is_running, status_message):
+        """Handle Tor status changes"""
+        print(f"Tor status: {status_message}")
+        # Update all Tor buttons
+        for tab_id, tab_info in self.tab_data.items():
+            widget = tab_info['widget']
+            if hasattr(widget, 'tor_btn'):
+                self.update_tor_button(widget.tor_btn)
+
     def open_settings(self):
         dialog = SettingsDialog(self.config_manager, self)
         if dialog.exec_() == QDialog.Accepted:
@@ -424,13 +624,19 @@ class CyberBrowser(QMainWindow):
         """Update Tor button text and style based on current status"""
         tor_enabled = self.config_manager.get("enable_tor", False)
         tor_available = self.config_manager.is_tor_available()
+        tor_running = self.tor_manager.is_tor_running()
         
         if not tor_available:
             tor_btn.setText("Tor: Unavailable")
             tor_btn.setObjectName("tor_unavailable")
+        elif tor_enabled and tor_running:
+            tor_btn.setText("Tor: Connected")
+            tor_btn.setObjectName("tor_enabled")
+        elif tor_enabled and not tor_running:
+            tor_btn.setText("Tor: Connecting...")
+            tor_btn.setObjectName("tor_unavailable")
         else:
-            status = "Enabled" if tor_enabled else "Disabled"
-            tor_btn.setText(f"Tor: {status}")
+            tor_btn.setText("Tor: Disabled")
             tor_btn.setObjectName("")
         
         tor_btn.style().unpolish(tor_btn)
@@ -476,6 +682,9 @@ class CyberBrowser(QMainWindow):
         subtitle.setObjectName("subtitle")
         subtitle.setAlignment(Qt.AlignCenter)
 
+        # Add onion site examples
+        
+
         search_engine_layout = QHBoxLayout()
         search_engine_layout.setAlignment(Qt.AlignCenter)
         
@@ -493,7 +702,7 @@ class CyberBrowser(QMainWindow):
         search_engine_layout.addWidget(search_engine_combo)
 
         search_input = QLineEdit()
-        search_input.setPlaceholderText("Search or enter a website")
+        search_input.setPlaceholderText("Search or enter a website (.onion sites work with Tor)")
         search_input.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
         search_input.returnPressed.connect(lambda: self.perform_search(tab_id))
 
@@ -537,10 +746,52 @@ class CyberBrowser(QMainWindow):
         new_tor = not current_tor
         self.config_manager.set("enable_tor", new_tor)
         
+        if new_tor:
+
+            success = self.tor_manager.start_tor()
+            if success:
+
+                QApplication.processEvents()
+                self.setup_tor_proxy()
+            else:
+                self.config_manager.set("enable_tor", False)
+        else:
+
+            self.tor_manager.stop_tor()
+            self.remove_tor_proxy()
+        
         for tab_id, tab_info in self.tab_data.items():
             widget = tab_info['widget']
             if hasattr(widget, 'tor_btn'):
                 self.update_tor_button(widget.tor_btn)
+
+    def setup_tor_proxy(self):
+        """Configure the application to use Tor SOCKS proxy"""
+
+        os.environ['QTWEBENGINE_CHROMIUM_FLAGS'] = (
+            '--proxy-server=socks5://127.0.0.1:9050 '
+            '--host-resolver-rules="MAP * ~NOTFOUND , EXCLUDE 127.0.0.1" '
+            '--disable-extensions '
+            '--disable-plugins '
+            '--disable-web-security '
+            '--allow-running-insecure-content'
+        )
+        
+        # Create new Tor profile if it doesn't exist
+        if self.tor_profile is None:
+            self.tor_profile = TorWebEngineProfile(tor_enabled=True, parent=self)
+        
+        print("Tor proxy configured - .onion sites should now be accessible")
+
+    def remove_tor_proxy(self):
+        """Remove Tor proxy configuration"""
+
+        if 'QTWEBENGINE_CHROMIUM_FLAGS' in os.environ:
+            del os.environ['QTWEBENGINE_CHROMIUM_FLAGS']
+        
+        QNetworkProxyFactory.setUseSystemConfiguration(True)
+        
+        print("Tor proxy removed - using normal connection")
 
     def create_new_tab(self):
         new_tab_index = self.tab_bar.count() - 1
@@ -603,6 +854,32 @@ class CyberBrowser(QMainWindow):
                     widget = self.tab_data[tab_id]['widget']
                     self.stack.setCurrentWidget(widget)
 
+    def get_web_engine_profile(self):
+        """Get the appropriate web engine profile based on Tor status"""
+        tor_enabled = self.config_manager.get("enable_tor", False)
+        tor_running = self.tor_manager.is_tor_running()
+        
+        if tor_enabled and tor_running:
+            if self.tor_profile is None:
+                self.tor_profile = TorWebEngineProfile(tor_enabled=True, parent=self)
+            return self.tor_profile
+        else:
+            return self.normal_profile
+
+    def create_tor_browser_view(self, url):
+        """Create a QWebEngineView specifically configured for Tor"""
+        browser = QWebEngineView()
+        
+        profile = self.get_web_engine_profile()
+        page = QWebEnginePage(profile, browser)
+        browser.setPage(page)
+        
+        if url and '.onion' in url:
+
+            page.profile().setHttpUserAgent("Mozilla/5.0 (Windows NT 10.0; rv:91.0) Gecko/20100101 Firefox/91.0")
+        
+        return browser
+
     def perform_search(self, tab_id):
         if tab_id not in self.tab_data:
             return
@@ -616,6 +893,45 @@ class CyberBrowser(QMainWindow):
         query = widget.search_input.text().strip()
         if not query:
             return
+
+        tor_enabled = self.config_manager.get("enable_tor", False)
+        tor_running = self.tor_manager.is_tor_running()
+        
+        if tor_enabled and not tor_running:
+            QMessageBox.warning(
+                self,
+                "Tor Not Ready",
+                "Tor is enabled but not yet connected. Please wait for Tor to start or disable Tor mode."
+            )
+            return
+
+        if '.onion' in query and not (tor_enabled and tor_running):
+            reply = QMessageBox.question(
+                self,
+                "Onion Site Detected",
+                "You're trying to access a .onion site but Tor is not enabled.\n\n"
+                "Would you like to enable Tor to access this site?",
+                QMessageBox.Yes | QMessageBox.No
+            )
+            if reply == QMessageBox.Yes:
+                if self.config_manager.is_tor_available():
+                    self.config_manager.set("enable_tor", True)
+                    success = self.tor_manager.start_tor()
+                    if success:
+                        self.setup_tor_proxy()
+
+                        for tid, tinfo in self.tab_data.items():
+                            tw = tinfo['widget']
+                            if hasattr(tw, 'tor_btn'):
+                                self.update_tor_button(tw.tor_btn)
+                    else:
+                        QMessageBox.warning(self, "Tor Error", "Failed to start Tor. Please check your Tor configuration.")
+                        return
+                else:
+                    QMessageBox.warning(self, "Tor Unavailable", "Tor is not configured. Please set up Tor in Settings first.")
+                    return
+            else:
+                return
 
         selected_engine = "Google"  
         if hasattr(widget, 'search_engine_combo'):
@@ -632,8 +948,26 @@ class CyberBrowser(QMainWindow):
             search_title = f"{selected_engine}: {query[:20]}..."
 
         if tab_info['web_view'] is None:
-            browser = QWebEngineView()
+
+            if tor_enabled and tor_running:
+                browser = self.create_tor_browser_view(url)
+                print(f"Created Tor browser for: {url}")
+            else:
+                browser = QWebEngineView()
+                page = QWebEnginePage(self.normal_profile, browser)
+                browser.setPage(page)
+            
             browser.load(QUrl(url))
+            
+            def on_load_finished(success):
+                if success:
+                    print(f"Successfully loaded: {url}")
+                else:
+                    print(f"Failed to load: {url}")
+                    if '.onion' in url:
+                        print("Note: .onion sites require Tor to be running")
+            
+            browser.loadFinished.connect(on_load_finished)
             
             old_widget = tab_info['widget']
             self.stack.removeWidget(old_widget)
@@ -649,6 +983,15 @@ class CyberBrowser(QMainWindow):
             self.update_tab_title(tab_id, search_title)
         else:
             browser = tab_info['web_view']
+            
+            current_profile = browser.page().profile()
+            new_profile = self.get_web_engine_profile()
+            
+            if current_profile != new_profile:
+
+                new_page = QWebEnginePage(new_profile, browser)
+                browser.setPage(new_page)
+            
             browser.load(QUrl(url))
             self.stack.setCurrentWidget(browser)
             
@@ -662,7 +1005,27 @@ class CyberBrowser(QMainWindow):
                 self.tab_bar.setTabText(tab_index, display_title)
                 break
 
+    def test_tor_connection(self):
+        """Test if Tor is working by checking the SOCKS proxy"""
+        try:
+            import socks
+            import socket
+            
+            sock = socks.socksocket()
+            sock.set_proxy(socks.SOCKS5, "127.0.0.1", 9050)
+            sock.settimeout(10)
+            
+            sock.connect(("duckduckgogg42ts72.onion", 80))
+            sock.close()
+            return True
+        except Exception as e:
+            print(f"Tor connection test failed: {e}")
+            return False
+
     def closeEvent(self, event):
+
+        self.tor_manager.stop_tor()
+        
         self.config_manager.set("window_width", self.width())
         self.config_manager.set("window_height", self.height())
         super().closeEvent(event)
@@ -672,6 +1035,7 @@ if __name__ == "__main__":
     os.environ['QT_LOGGING_RULES'] = 'qt.qpa.fonts.debug=false;js.debug=false'
     app = QApplication(sys.argv)
     app.setAttribute(Qt.AA_DisableWindowContextHelpButton, True)
+    
     window = CyberBrowser()
     window.show()
     sys.exit(app.exec_())
