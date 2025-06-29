@@ -174,6 +174,9 @@ CyberBrowser stores settings in `cyberbrowser_config.json`. Key configurations i
 - Independent browsing contexts
 - Tab-specific Tor toggle (when available)
 
+## Known Issues
+- Some settings dont get applied correctly like for example zoom setting
+
 ## 🐛 Troubleshooting
 
 ### Tor Not Working
