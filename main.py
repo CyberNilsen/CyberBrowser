@@ -9,14 +9,13 @@ from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QWidget, QLabel, QPushButton,
     QVBoxLayout, QHBoxLayout, QLineEdit, QTabBar, QStackedLayout,
     QSizePolicy, QComboBox, QDialog, QFormLayout, QDialogButtonBox,
-    QMessageBox, QCheckBox, QFileDialog
+    QMessageBox, QCheckBox, QFileDialog, QSpinBox, QSlider, QGroupBox, QScrollArea
 )
 from PyQt5.QtCore import Qt, QUrl, pyqtSignal, QObject, QThread
 from PyQt5.QtGui import QIcon, QPixmap
 from PyQt5.QtWebEngineWidgets import QWebEngineView, QWebEngineProfile, QWebEnginePage
 from PyQt5.QtNetwork import QNetworkProxy, QNetworkProxyFactory
 
-# Set Chromium flags before QApplication is created
 os.environ['QT_LOGGING_RULES'] = 'qt.qpa.fonts.debug=false'
 
 
@@ -40,14 +39,14 @@ class TorProxyFactory(QNetworkProxyFactory):
 
 class TorManager(QObject):
     """Manages Tor process and connection"""
-    tor_status_changed = pyqtSignal(bool, str)  # (is_running, status_message)
+    tor_status_changed = pyqtSignal(bool, str) 
     
     def __init__(self, config_manager):
         super().__init__()
         self.config_manager = config_manager
         self.tor_process = None
-        self.tor_port = 9050  # Default Tor SOCKS port
-        self.control_port = 9051  # Control port
+        self.tor_port = 9050  
+        self.control_port = 9051  
         self.is_running = False
         
     def start_tor(self):
@@ -60,7 +59,6 @@ class TorManager(QObject):
             self.tor_status_changed.emit(False, "Tor directory not configured")
             return False
             
-        # Find Tor executable
         tor_executable = None
         for exe in ["tor", "tor.exe"]:
             tor_path = os.path.join(tor_dir, exe)
@@ -73,11 +71,9 @@ class TorManager(QObject):
             return False
             
         try:
-            # Create Tor data directory
             tor_data_dir = os.path.join(os.path.expanduser("~"), ".cyberbrowser_tor")
             os.makedirs(tor_data_dir, exist_ok=True)
             
-            # Start Tor with custom configuration
             tor_config = [
                 tor_executable,
                 "--SocksPort", f"127.0.0.1:{self.tor_port}",
@@ -95,7 +91,6 @@ class TorManager(QObject):
                 creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0
             )
             
-            # Wait for Tor to start (check if SOCKS port is available)
             if self._wait_for_tor_connection():
                 self.is_running = True
                 self.tor_status_changed.emit(True, "Tor is running")
@@ -150,24 +145,35 @@ class ConfigManager:
     def __init__(self):
         self.config_file = "cyberbrowser_config.json"
         self.default_config = {
-            "default_search_engine": "Google",
-            "search_engines": {
-                "Google": "https://www.google.com/search?q={}",
-                "DuckDuckGo": "https://duckduckgo.com/?q={}",
-                "Bing": "https://www.bing.com/search?q={}",
-                "Yahoo": "https://search.yahoo.com/search?p={}",
-                "Yandex": "https://yandex.com/search/?text={}",
-                "Searx": "https://searx.org/search?q={}",
-                "Startpage": "https://www.startpage.com/sp/search?query={}",
-                "DuckDuckGo Onion": "https://duckduckgogg42ts72.onion/?q={}",
-                "Ahmia Onion Search": "https://ahmia.fi/search/?q={}"
-            },
-            "homepage_url": "",
-            "enable_tor": False,
-            "tor_directory": "",
-            "window_width": 1400,
-            "window_height": 900
-        }
+    "default_search_engine": "Google",
+    "search_engines": {
+        "Google": "https://www.google.com/search?q={}",
+        "DuckDuckGo": "https://duckduckgo.com/?q={}",
+        "Bing": "https://www.bing.com/search?q={}",
+        "Yahoo": "https://search.yahoo.com/search?p={}",
+        "Yandex": "https://yandex.com/search/?text={}",
+        "Searx": "https://searx.org/search?q={}",
+        "Startpage": "https://www.startpage.com/sp/search?query={}",
+        "DuckDuckGo Onion": "https://duckduckgogg42ts72.onion/?q={}",
+        "Ahmia Onion Search": "https://ahmia.fi/search/?q={}"
+    },
+    "homepage_url": "",
+    "enable_tor": False,
+    "tor_directory": "",
+    "window_width": 1400,
+    "window_height": 900,
+    "enable_javascript": True,
+    "enable_plugins": True,
+    "enable_images": True,
+    "enable_cookies": True,
+    "user_agent": "",
+    "download_directory": "",
+    "enable_popup_blocking": True,
+    "enable_notifications": False,
+    "zoom_level": 100,
+    "clear_data_on_exit": False,
+    "enable_spell_check": True
+}
         self.config = self.load_config()
 
     def load_config(self):
@@ -234,27 +240,41 @@ class TorWebEngineProfile(QWebEngineProfile):
         
     def setup_profile(self):
         if self.tor_enabled:
-            # Set up proxy factory
+
             self.proxy_factory = TorProxyFactory(use_tor=True)
             
-            # Set privacy-focused user agent
             self.setHttpUserAgent("Mozilla/5.0 (Windows NT 10.0; rv:91.0) Gecko/20100101 Firefox/91.0")
             
-            # Set additional privacy settings
             self.setPersistentCookiesPolicy(QWebEngineProfile.NoPersistentCookies)
             self.setHttpCacheType(QWebEngineProfile.MemoryHttpCache)
             self.setHttpCacheMaximumSize(0)
             
-            # Set proxy factory globally
             QNetworkProxyFactory.setApplicationProxyFactory(self.proxy_factory)
         else:
-            # Reset to default settings
+
             self.setHttpUserAgent("")
             self.setPersistentCookiesPolicy(QWebEngineProfile.AllowPersistentCookies)
             self.setHttpCacheType(QWebEngineProfile.DiskHttpCache)
             
-            # Reset proxy
             QNetworkProxyFactory.setUseSystemConfiguration(True)
+    
+        self.apply_config_settings()
+
+def apply_config_settings(self):
+    """Apply settings from config manager"""
+    if hasattr(self, 'config_manager'):
+        config = self.config_manager
+        
+        download_dir = config.get("download_directory", "")
+        if download_dir and os.path.exists(download_dir):
+            self.setDownloadPath(download_dir)
+        
+        custom_ua = config.get("user_agent", "")
+        if custom_ua and not self.tor_enabled:
+            self.setHttpUserAgent(custom_ua)
+        
+        if not config.get("enable_cookies", True):
+            self.setPersistentCookiesPolicy(QWebEngineProfile.NoPersistentCookies)
 
 
 class SettingsDialog(QDialog):
@@ -263,112 +283,698 @@ class SettingsDialog(QDialog):
         self.config_manager = config_manager
         self.setWindowTitle("Settings")
         self.setModal(True)
-        self.resize(500, 400)
+        self.resize(700, 750)
+        self.setMinimumSize(650, 700)
         self.init_ui()
 
     def init_ui(self):
         layout = QVBoxLayout(self)
+        layout.setContentsMargins(20, 20, 20, 20)
+        layout.setSpacing(15)
         
-        form_layout = QFormLayout()
+        from PyQt5.QtWidgets import QTabWidget, QScrollArea
+        tab_widget = QTabWidget()
+        
+        general_tab = self.create_general_tab()
+        tab_widget.addTab(general_tab, "General")
+        
+        privacy_tab = self.create_privacy_tab()
+        tab_widget.addTab(privacy_tab, "Privacy & Security")
+        
+        advanced_tab = self.create_advanced_tab()
+        tab_widget.addTab(advanced_tab, "Advanced")
+        
+        
+        tor_tab = self.create_tor_tab()
+        tab_widget.addTab(tor_tab, "Tor")
+        
+        layout.addWidget(tab_widget)
+        
+        
+        button_box = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel | QDialogButtonBox.RestoreDefaults)
+        button_box.accepted.connect(self.accept)
+        button_box.rejected.connect(self.reject)
+        button_box.button(QDialogButtonBox.RestoreDefaults).clicked.connect(self.restore_defaults)
+        layout.addWidget(button_box)
+        
+        self.setStyleSheet(self.get_dialog_stylesheet())
+
+    def create_general_tab(self):
+        scroll = QScrollArea()
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        
+        widget = QWidget()
+        layout = QVBoxLayout(widget)
+        layout.setContentsMargins(20, 20, 20, 20)
+        layout.setSpacing(20)
+        
+        search_group = QGroupBox("Search Engine")
+        search_layout = QFormLayout(search_group)
+        search_layout.setSpacing(15)
+        search_layout.setContentsMargins(20, 25, 20, 20)
         
         self.search_engine_combo = QComboBox()
+        self.search_engine_combo.setMinimumHeight(40)
         search_engines = self.config_manager.get("search_engines", {})
         self.search_engine_combo.addItems(search_engines.keys())
         current_engine = self.config_manager.get("default_search_engine", "Google")
         if current_engine in search_engines:
             self.search_engine_combo.setCurrentText(current_engine)
-        
-        form_layout.addRow("Default Search Engine:", self.search_engine_combo)
+        search_layout.addRow("Default Search Engine:", self.search_engine_combo)
         
         self.homepage_input = QLineEdit()
+        self.homepage_input.setMinimumHeight(40)
         self.homepage_input.setText(self.config_manager.get("homepage_url", ""))
         self.homepage_input.setPlaceholderText("Leave empty for default home page")
-        form_layout.addRow("Homepage URL:", self.homepage_input)
+        search_layout.addRow("Homepage URL:", self.homepage_input)
         
-        tor_layout = QHBoxLayout()
+        layout.addWidget(search_group)
+        
+        download_group = QGroupBox("Downloads")
+        download_layout = QFormLayout(download_group)
+        download_layout.setSpacing(15)
+        download_layout.setContentsMargins(20, 25, 20, 20)
+        
+        download_dir_layout = QHBoxLayout()
+        self.download_directory_input = QLineEdit()
+        self.download_directory_input.setMinimumHeight(40)
+        self.download_directory_input.setText(self.config_manager.get("download_directory", ""))
+        self.download_directory_input.setPlaceholderText("Default system download folder")
+        
+        download_browse_btn = QPushButton("Browse")
+        download_browse_btn.setMinimumHeight(40)
+        download_browse_btn.setMinimumWidth(80)
+        download_browse_btn.clicked.connect(self.browse_download_directory)
+        
+        download_dir_layout.addWidget(self.download_directory_input)
+        download_dir_layout.addWidget(download_browse_btn)
+        download_layout.addRow("Download Directory:", download_dir_layout)
+        
+        layout.addWidget(download_group)
+        
+        display_group = QGroupBox("Display")
+        display_layout = QFormLayout(display_group)
+        display_layout.setSpacing(15)
+        display_layout.setContentsMargins(20, 25, 20, 20)
+        
+        self.zoom_slider = QSlider(Qt.Horizontal)
+        self.zoom_slider.setRange(50, 200)
+        self.zoom_slider.setValue(self.config_manager.get("zoom_level", 100))
+        self.zoom_slider.setTickPosition(QSlider.TicksBelow)
+        self.zoom_slider.setTickInterval(25)
+        self.zoom_slider.setMinimumHeight(30)
+        
+        zoom_layout = QHBoxLayout()
+        self.zoom_label = QLabel(f"{self.zoom_slider.value()}%")
+        self.zoom_label.setMinimumWidth(50)
+        self.zoom_label.setAlignment(Qt.AlignCenter)
+        zoom_layout.addWidget(self.zoom_slider)
+        zoom_layout.addWidget(self.zoom_label)
+        self.zoom_slider.valueChanged.connect(lambda v: self.zoom_label.setText(f"{v}%"))
+        
+        display_layout.addRow("Zoom Level:", zoom_layout)
+        layout.addWidget(display_group)
+        
+        layout.addStretch()
+        
+        scroll.setWidget(widget)
+        scroll.setWidgetResizable(True)
+        return scroll
+
+    def create_privacy_tab(self):
+        scroll = QScrollArea()
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        
+        widget = QWidget()
+        layout = QVBoxLayout(widget)
+        layout.setContentsMargins(20, 20, 20, 20)
+        layout.setSpacing(20)
+        
+        privacy_group = QGroupBox("Privacy Settings")
+        privacy_layout = QFormLayout(privacy_group)
+        privacy_layout.setSpacing(15)
+        privacy_layout.setContentsMargins(20, 25, 20, 20)
+        
+        self.enable_cookies_cb = QCheckBox()
+        self.enable_cookies_cb.setMinimumHeight(25)
+        self.enable_cookies_cb.setChecked(self.config_manager.get("enable_cookies", True))
+        privacy_layout.addRow("Enable Cookies:", self.enable_cookies_cb)
+        
+        self.enable_javascript_cb = QCheckBox()
+        self.enable_javascript_cb.setMinimumHeight(25)
+        self.enable_javascript_cb.setChecked(self.config_manager.get("enable_javascript", True))
+        privacy_layout.addRow("Enable JavaScript:", self.enable_javascript_cb)
+        
+        self.enable_images_cb = QCheckBox()
+        self.enable_images_cb.setMinimumHeight(25)
+        self.enable_images_cb.setChecked(self.config_manager.get("enable_images", True))
+        privacy_layout.addRow("Load Images:", self.enable_images_cb)
+        
+        self.enable_plugins_cb = QCheckBox()
+        self.enable_plugins_cb.setMinimumHeight(25)
+        self.enable_plugins_cb.setChecked(self.config_manager.get("enable_plugins", True))
+        privacy_layout.addRow("Enable Plugins:", self.enable_plugins_cb)
+        
+        self.enable_popup_blocking_cb = QCheckBox()
+        self.enable_popup_blocking_cb.setMinimumHeight(25)
+        self.enable_popup_blocking_cb.setChecked(self.config_manager.get("enable_popup_blocking", True))
+        privacy_layout.addRow("Block Popups:", self.enable_popup_blocking_cb)
+        
+        self.enable_notifications_cb = QCheckBox()
+        self.enable_notifications_cb.setMinimumHeight(25)
+        self.enable_notifications_cb.setChecked(self.config_manager.get("enable_notifications", False))
+        privacy_layout.addRow("Enable Notifications:", self.enable_notifications_cb)
+        
+        self.clear_data_on_exit_cb = QCheckBox()
+        self.clear_data_on_exit_cb.setMinimumHeight(25)
+        self.clear_data_on_exit_cb.setChecked(self.config_manager.get("clear_data_on_exit", False))
+        privacy_layout.addRow("Clear Data on Exit:", self.clear_data_on_exit_cb)
+        
+        layout.addWidget(privacy_group)
+        
+        ua_group = QGroupBox("User Agent")
+        ua_layout = QFormLayout(ua_group)
+        ua_layout.setSpacing(15)
+        ua_layout.setContentsMargins(20, 25, 20, 20)
+        
+        self.user_agent_input = QLineEdit()
+        self.user_agent_input.setMinimumHeight(40)
+        self.user_agent_input.setText(self.config_manager.get("user_agent", ""))
+        self.user_agent_input.setPlaceholderText("Leave empty for default user agent")
+        ua_layout.addRow("Custom User Agent:", self.user_agent_input)
+        
+        layout.addWidget(ua_group)
+        
+        layout.addStretch()
+        
+        scroll.setWidget(widget)
+        scroll.setWidgetResizable(True)
+        return scroll
+
+    def create_advanced_tab(self):
+        scroll = QScrollArea()
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        
+        widget = QWidget()
+        layout = QVBoxLayout(widget)
+        layout.setContentsMargins(20, 20, 20, 20)
+        layout.setSpacing(20)
+        
+        advanced_group = QGroupBox("Advanced Settings")
+        advanced_layout = QFormLayout(advanced_group)
+        advanced_layout.setSpacing(15)
+        advanced_layout.setContentsMargins(20, 25, 20, 20)
+        
+        self.enable_spell_check_cb = QCheckBox()
+        self.enable_spell_check_cb.setMinimumHeight(25)
+        self.enable_spell_check_cb.setChecked(self.config_manager.get("enable_spell_check", True))
+        advanced_layout.addRow("Enable Spell Check:", self.enable_spell_check_cb)
+        
+        layout.addWidget(advanced_group)
+        
+        data_group = QGroupBox("Data Management")
+        data_layout = QVBoxLayout(data_group)
+        data_layout.setSpacing(15)
+        data_layout.setContentsMargins(20, 25, 20, 20)
+        
+        clear_cache_btn = QPushButton("Clear Browser Cache")
+        clear_cache_btn.setMinimumHeight(45)
+        clear_cache_btn.clicked.connect(self.clear_cache)
+        data_layout.addWidget(clear_cache_btn)
+        
+        clear_cookies_btn = QPushButton("Clear All Cookies")
+        clear_cookies_btn.setMinimumHeight(45)
+        clear_cookies_btn.clicked.connect(self.clear_cookies)
+        data_layout.addWidget(clear_cookies_btn)
+        
+        clear_history_btn = QPushButton("Clear Browsing History")
+        clear_history_btn.setMinimumHeight(45)
+        clear_history_btn.clicked.connect(self.clear_history)
+        data_layout.addWidget(clear_history_btn)
+        
+        layout.addWidget(data_group)
+        
+        layout.addStretch()
+        
+        scroll.setWidget(widget)
+        scroll.setWidgetResizable(True)
+        return scroll
+
+    def create_tor_tab(self):
+        scroll = QScrollArea()
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        
+        widget = QWidget()
+        layout = QVBoxLayout(widget)
+        layout.setContentsMargins(20, 20, 20, 20)
+        layout.setSpacing(20)
+        
+        tor_group = QGroupBox("Tor Configuration")
+        tor_layout = QFormLayout(tor_group)
+        tor_layout.setSpacing(15)
+        tor_layout.setContentsMargins(20, 25, 20, 20)
+        
+        tor_dir_layout = QHBoxLayout()
         self.tor_directory_input = QLineEdit()
+        self.tor_directory_input.setMinimumHeight(40)
         self.tor_directory_input.setText(self.config_manager.get("tor_directory", ""))
         self.tor_directory_input.setPlaceholderText("Path to Tor installation directory")
         
         tor_browse_btn = QPushButton("Browse")
+        tor_browse_btn.setMinimumHeight(40)
+        tor_browse_btn.setMinimumWidth(80)
         tor_browse_btn.clicked.connect(self.browse_tor_directory)
         
-        tor_layout.addWidget(self.tor_directory_input)
-        tor_layout.addWidget(tor_browse_btn)
-        
-        form_layout.addRow("Tor Directory:", tor_layout)
+        tor_dir_layout.addWidget(self.tor_directory_input)
+        tor_dir_layout.addWidget(tor_browse_btn)
+        tor_layout.addRow("Tor Directory:", tor_dir_layout)
         
         self.tor_status_label = QLabel()
+        self.tor_status_label.setMinimumHeight(25)
         self.update_tor_status()
-        form_layout.addRow("Tor Status:", self.tor_status_label)
+        tor_layout.addRow("Tor Status:", self.tor_status_label)
         
-        # Add Tor setup instructions
-        instructions = QLabel("Tor Setup Instructions:\n"
-                            "1. Download Tor Browser from torproject.org\n"
-                            "2. Extract it to a folder\n"
-                            "3. Browse to the 'Tor' folder inside the extracted directory\n"
-                            "4. Select the folder containing tor.exe (Windows) or tor (Linux/Mac)")
+        layout.addWidget(tor_group)
+        
+        instructions_group = QGroupBox("Setup Instructions")
+        instructions_layout = QVBoxLayout(instructions_group)
+        instructions_layout.setContentsMargins(20, 25, 20, 20)
+        
+        instructions = QLabel(
+            "Tor Setup Instructions:\n\n"
+            "1. Download Tor Browser from torproject.org\n"
+            "2. Extract it to a folder\n"
+            "3. Browse to the 'Tor' folder inside the extracted directory\n"
+            "4. Select the folder containing tor.exe (Windows) or tor (Linux/Mac)\n\n"
+            "Note: The Tor directory should contain the tor executable file."
+        )
         instructions.setWordWrap(True)
-        instructions.setStyleSheet("color: #94a3b8; font-size: 12px; padding: 10px; background-color: #1e293b; border-radius: 5px;")
-        form_layout.addRow("", instructions)
+        instructions.setAlignment(Qt.AlignTop)
+        instructions.setMinimumHeight(120)
+        instructions_layout.addWidget(instructions)
         
-        layout.addLayout(form_layout)
-        
-        button_box = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
-        button_box.accepted.connect(self.accept)
-        button_box.rejected.connect(self.reject)
-        layout.addWidget(button_box)
+        layout.addWidget(instructions_group)
         
         self.tor_directory_input.textChanged.connect(self.update_tor_status)
         
-        self.setStyleSheet("""
+        layout.addStretch()
+        
+        scroll.setWidget(widget)
+        scroll.setWidgetResizable(True)
+        return scroll
+
+    def browse_download_directory(self):
+        directory = QFileDialog.getExistingDirectory(
+            self, 
+            "Select Download Directory",
+            self.download_directory_input.text()
+        )
+        if directory:
+            self.download_directory_input.setText(directory)
+
+    def browse_tor_directory(self):
+        directory = QFileDialog.getExistingDirectory(
+            self, 
+            "Select Tor Installation Directory",
+            self.tor_directory_input.text()
+        )
+        if directory:
+            self.tor_directory_input.setText(directory)
+
+    def update_tor_status(self):
+        tor_dir = self.tor_directory_input.text().strip()
+        if not tor_dir:
+            self.tor_status_label.setText("No directory specified")
+            self.tor_status_label.setStyleSheet("color: #94a3b8; font-weight: normal;")
+            return
+        
+        if not os.path.exists(tor_dir):
+            self.tor_status_label.setText("Directory does not exist")
+            self.tor_status_label.setStyleSheet("color: #ef4444; font-weight: bold;")
+            return
+        
+        tor_executables = ["tor", "tor.exe"]
+        tor_found = False
+        for exe in tor_executables:
+            tor_path = os.path.join(tor_dir, exe)
+            if os.path.isfile(tor_path) and os.access(tor_path, os.X_OK):
+                tor_found = True
+                break
+        
+        if tor_found:
+            self.tor_status_label.setText("✓ Tor executable found")
+            self.tor_status_label.setStyleSheet("color: #22c55e; font-weight: bold;")
+        else:
+            self.tor_status_label.setText("✗ Tor executable not found")
+            self.tor_status_label.setStyleSheet("color: #ef4444; font-weight: bold;")
+
+    def clear_cache(self):
+        reply = QMessageBox.question(self, "Clear Cache", "Are you sure you want to clear the browser cache?")
+        if reply == QMessageBox.Yes:
+
+            QMessageBox.information(self, "Cache Cleared", "Browser cache has been cleared.")
+
+    def clear_cookies(self):
+        reply = QMessageBox.question(self, "Clear Cookies", "Are you sure you want to clear all cookies?")
+        if reply == QMessageBox.Yes:
+            QMessageBox.information(self, "Cookies Cleared", "All cookies have been cleared.")
+
+    def clear_history(self):
+        reply = QMessageBox.question(self, "Clear History", "Are you sure you want to clear browsing history?")
+        if reply == QMessageBox.Yes:
+            QMessageBox.information(self, "History Cleared", "Browsing history has been cleared.")
+
+    def restore_defaults(self):
+        reply = QMessageBox.question(self, "Restore Defaults", "Are you sure you want to restore all settings to defaults?")
+        if reply == QMessageBox.Yes:
+            
+            self.search_engine_combo.setCurrentText("Google")
+            self.homepage_input.setText("")
+            self.download_directory_input.setText("")
+            self.zoom_slider.setValue(100)
+            self.enable_cookies_cb.setChecked(True)
+            self.enable_javascript_cb.setChecked(True)
+            self.enable_images_cb.setChecked(True)
+            self.enable_plugins_cb.setChecked(True)
+            self.enable_popup_blocking_cb.setChecked(True)
+            self.enable_notifications_cb.setChecked(False)
+            self.clear_data_on_exit_cb.setChecked(False)
+            self.enable_spell_check_cb.setChecked(True)
+            self.user_agent_input.setText("")
+            self.tor_directory_input.setText("")
+
+    def get_settings(self):
+        return {
+            "default_search_engine": self.search_engine_combo.currentText(),
+            "homepage_url": self.homepage_input.text().strip(),
+            "download_directory": self.download_directory_input.text().strip(),
+            "zoom_level": self.zoom_slider.value(),
+            "enable_cookies": self.enable_cookies_cb.isChecked(),
+            "enable_javascript": self.enable_javascript_cb.isChecked(),
+            "enable_images": self.enable_images_cb.isChecked(),
+            "enable_plugins": self.enable_plugins_cb.isChecked(),
+            "enable_popup_blocking": self.enable_popup_blocking_cb.isChecked(),
+            "enable_notifications": self.enable_notifications_cb.isChecked(),
+            "clear_data_on_exit": self.clear_data_on_exit_cb.isChecked(),
+            "enable_spell_check": self.enable_spell_check_cb.isChecked(),
+            "user_agent": self.user_agent_input.text().strip(),
+            "tor_directory": self.tor_directory_input.text().strip()
+        }
+
+    def get_dialog_stylesheet(self):
+        return """
+            /* Main Dialog Styling */
             QDialog {
                 background-color: #0f172a;
                 color: #e2e8f0;
+                font-family: 'Segoe UI', Tahoma, Arial, sans-serif;
             }
+            
+            /* Tab Widget Styling */
+            QTabWidget::pane {
+                border: 2px solid #334155;
+                background-color: #1e293b;
+                border-radius: 8px;
+                top: -2px;
+            }
+            
+            QTabBar::tab {
+                background: linear-gradient(135deg, #334155, #475569);
+                color: #f1f5f9;
+                padding: 12px 20px;
+                margin-right: 2px;
+                border-top-left-radius: 8px;
+                border-top-right-radius: 8px;
+                border: 2px solid #334155;
+                border-bottom: none;
+                font-size: 14px;
+                font-weight: 500;
+                min-width: 100px;
+            }
+            
+            QTabBar::tab:selected {
+                background: linear-gradient(135deg, #1e293b, #334155);
+                border-color: #3b82f6;
+                color: #ffffff;
+                font-weight: 600;
+            }
+            
+            QTabBar::tab:hover:!selected {
+                background: linear-gradient(135deg, #475569, #64748b);
+                border-color: #64748b;
+            }
+            
+            /* Group Box Styling */
+            QGroupBox {
+                font-weight: 600;
+                font-size: 15px;
+                border: 2px solid #334155;
+                border-radius: 12px;
+                margin-top: 15px;
+                padding-top: 15px;
+                color: #f1f5f9;
+                background-color: rgba(30, 41, 59, 0.5);
+            }
+            
+            QGroupBox::title {
+                subcontrol-origin: margin;
+                left: 15px;
+                padding: 5px 10px;
+                background-color: #1e293b;
+                border: 1px solid #334155;
+                border-radius: 6px;
+                color: #3b82f6;
+                font-weight: bold;
+            }
+            
+            /* Label Styling */
             QLabel {
                 color: #f1f5f9;
                 font-size: 14px;
+                font-weight: 500;
+                padding: 2px;
             }
+            
+            /* Form Layout Labels */
+            QFormLayout QLabel {
+                color: #cbd5e1;
+                font-size: 14px;
+                font-weight: 500;
+                min-width: 150px;
+                padding-right: 10px;
+            }
+            
+            /* Input Field Styling */
             QComboBox, QLineEdit {
-                background-color: #1e293b;
-                border: 2px solid #334155;
-                border-radius: 6px;
-                padding: 8px;
+                background: linear-gradient(135deg, #1e293b, #334155);
+                border: 2px solid #475569;
+                border-radius: 8px;
+                padding: 10px 15px;
                 color: #f1f5f9;
                 font-size: 14px;
+                min-height: 20px;
+                selection-background-color: #3b82f6;
             }
+            
             QComboBox:focus, QLineEdit:focus {
                 border: 2px solid #3b82f6;
+                background: linear-gradient(135deg, #334155, #1e293b);
+                outline: none;
             }
+            
+            QComboBox:hover, QLineEdit:hover {
+                border-color: #64748b;
+                background: linear-gradient(135deg, #334155, #1e293b);
+            }
+            
+            /* ComboBox Dropdown */
+            QComboBox::drop-down {
+                border: none;
+                width: 25px;
+                background: transparent;
+            }
+            
+            QComboBox::down-arrow {
+                image: none;
+                border-left: 6px solid transparent;
+                border-right: 6px solid transparent;
+                border-top: 6px solid #94a3b8;
+                margin-right: 8px;
+            }
+            
+            QComboBox::down-arrow:hover {
+                border-top-color: #3b82f6;
+            }
+            
+            QComboBox QAbstractItemView {
+                background-color: #1e293b;
+                border: 2px solid #3b82f6;
+                border-radius: 8px;
+                selection-background-color: #3b82f6;
+                selection-color: white;
+                color: #f1f5f9;
+                padding: 5px;
+            }
+            
+            /* Checkbox Styling */
             QCheckBox {
                 color: #f1f5f9;
                 font-size: 14px;
+                font-weight: 500;
+                spacing: 8px;
             }
+            
             QCheckBox::indicator {
-                width: 18px;
-                height: 18px;
-                border: 2px solid #334155;
-                border-radius: 3px;
-                background-color: #1e293b;
+                width: 20px;
+                height: 20px;
+                border: 2px solid #475569;
+                border-radius: 4px;
+                background: linear-gradient(135deg, #1e293b, #334155);
             }
-            QCheckBox::indicator:checked {
-                background-color: #3b82f6;
+            
+            QCheckBox::indicator:hover {
                 border-color: #3b82f6;
+                background: linear-gradient(135deg, #334155, #1e293b);
             }
-            QPushButton {
-                background-color: #1e293b;
-                border: 2px solid #3b82f6;
-                border-radius: 6px;
-                padding: 8px 16px;
-                color: #3b82f6;
+            
+            QCheckBox::indicator:checked {
+                background: linear-gradient(135deg, #3b82f6, #2563eb);
+                border-color: #3b82f6;
+                image: none;
+            }
+            
+            QCheckBox::indicator:checked::after {
+                content: "✓";
+                color: white;
+                font-weight: bold;
                 font-size: 14px;
             }
-            QPushButton:hover {
-                background-color: #3b82f6;
-                color: white;
+            
+            /* Button Styling */
+            QPushButton {
+                background: linear-gradient(135deg, #1e293b, #334155);
+                border: 2px solid #3b82f6;
+                border-radius: 8px;
+                padding: 10px 20px;
+                color: #3b82f6;
+                font-size: 14px;
+                font-weight: 600;
+                min-height: 25px;
             }
-        """)
+            
+            QPushButton:hover {
+                background: linear-gradient(135deg, #3b82f6, #2563eb);
+                color: white;
+                border-color: #2563eb;
+                transform: translateY(-1px);
+            }
+            
+            QPushButton:pressed {
+                background: linear-gradient(135deg, #2563eb, #1d4ed8);
+                transform: translateY(0px);
+            }
+            
+            /* Slider Styling */
+            QSlider::groove:horizontal {
+                border: 2px solid #334155;
+                height: 10px;
+                background: linear-gradient(90deg, #1e293b, #334155);
+                border-radius: 6px;
+            }
+            
+            QSlider::handle:horizontal {
+                background: linear-gradient(135deg, #3b82f6, #2563eb);
+                border: 2px solid #1e40af;
+                width: 22px;
+                height: 22px;
+                margin: -8px 0;
+                border-radius: 11px;
+            }
+            
+            QSlider::handle:horizontal:hover {
+                background: linear-gradient(135deg, #2563eb, #1d4ed8);
+                border-color: #1e40af;
+            }
+            
+            QSlider::sub-page:horizontal {
+                background: linear-gradient(90deg, #3b82f6, #2563eb);
+                border-radius: 6px;
+            }
+            
+            /* Scroll Area Styling */
+            QScrollArea {
+                border: none;
+                background-color: transparent;
+            }
+            
+            QScrollBar:vertical {
+                background-color: #1e293b;
+                width: 12px;
+                border-radius: 6px;
+                margin: 0;
+            }
+            
+            QScrollBar::handle:vertical {
+                background-color: #475569;
+                border-radius: 6px;
+                min-height: 20px;
+                margin: 2px;
+            }
+            
+            QScrollBar::handle:vertical:hover {
+                background-color: #64748b;
+            }
+            
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
+                height: 0px;
+            }
+            
+            /* Dialog Button Box */
+            QDialogButtonBox QPushButton {
+                min-width: 100px;
+                padding: 8px 16px;
+            }
+            
+            /* Message Box Styling */
+            QMessageBox {
+                background-color: #0f172a;
+                color: #e2e8f0;
+            }
+            
+            QMessageBox QPushButton {
+                min-width: 80px;
+                padding: 6px 12px;
+            }
+        """
+
+    def apply_web_settings(self, web_view):
+        """Apply settings to a web view"""
+        if not web_view:
+            return
+        
+        page = web_view.page()
+        settings = page.settings()
+        
+        settings.setAttribute(settings.JavascriptEnabled, 
+                            self.config_manager.get("enable_javascript", True))
+        
+        settings.setAttribute(settings.AutoLoadImages, 
+                            self.config_manager.get("enable_images", True))
+    
+        settings.setAttribute(settings.PluginsEnabled, 
+                            self.config_manager.get("enable_plugins", True))
+        
+        settings.setAttribute(settings.JavascriptCanOpenWindows, 
+                            not self.config_manager.get("enable_popup_blocking", True))
+        
+        zoom_level = self.config_manager.get("zoom_level", 100)
+        web_view.setZoomFactor(zoom_level / 100.0)
+    
+        settings.setAttribute(settings.FocusOnNavigationEnabled, True)
 
     def browse_tor_directory(self):
         directory = QFileDialog.getExistingDirectory(
@@ -424,6 +1030,7 @@ class CyberBrowser(QMainWindow):
         self.setWindowTitle("CyberBrowser - Tor Ready")
         window_width = self.config_manager.get("window_width", 1400)
         window_height = self.config_manager.get("window_height", 900)
+        
         self.resize(window_width, window_height)
         
         try:
@@ -436,7 +1043,6 @@ class CyberBrowser(QMainWindow):
         self.next_tab_id = 0
         self.tab_id_mapping = {} 
         
-        # Web engine profiles
         self.normal_profile = QWebEngineProfile.defaultProfile()
         self.tor_profile = None
 
@@ -585,7 +1191,7 @@ class CyberBrowser(QMainWindow):
     def on_tor_status_changed(self, is_running, status_message):
         """Handle Tor status changes"""
         print(f"Tor status: {status_message}")
-        # Update all Tor buttons
+
         for tab_id, tab_info in self.tab_data.items():
             widget = tab_info['widget']
             if hasattr(widget, 'tor_btn'):
@@ -680,10 +1286,7 @@ class CyberBrowser(QMainWindow):
 
         subtitle = QLabel("Fast. Anonymous. Tor-Ready.")
         subtitle.setObjectName("subtitle")
-        subtitle.setAlignment(Qt.AlignCenter)
-
-        # Add onion site examples
-        
+        subtitle.setAlignment(Qt.AlignCenter)        
 
         search_engine_layout = QHBoxLayout()
         search_engine_layout.setAlignment(Qt.AlignCenter)
@@ -777,7 +1380,6 @@ class CyberBrowser(QMainWindow):
             '--allow-running-insecure-content'
         )
         
-        # Create new Tor profile if it doesn't exist
         if self.tor_profile is None:
             self.tor_profile = TorWebEngineProfile(tor_enabled=True, parent=self)
         
@@ -870,15 +1472,40 @@ class CyberBrowser(QMainWindow):
         """Create a QWebEngineView specifically configured for Tor"""
         browser = QWebEngineView()
         
+        
         profile = self.get_web_engine_profile()
         page = QWebEnginePage(profile, browser)
         browser.setPage(page)
         
+        page.profile().downloadRequested.connect(self.handle_download)
+        browser.setContextMenuPolicy(Qt.DefaultContextMenu)
+        
         if url and '.onion' in url:
-
             page.profile().setHttpUserAgent("Mozilla/5.0 (Windows NT 10.0; rv:91.0) Gecko/20100101 Firefox/91.0")
         
+        self.apply_web_settings(browser)
+        browser.page().profile().downloadRequested.connect(self.handle_download)
+    
         return browser
+    
+    def handle_download(self, download):
+        """Handle file downloads"""
+        download_dir = self.config_manager.get("download_directory", "")
+        if download_dir and os.path.exists(download_dir):
+            file_path = os.path.join(download_dir, download.suggestedFileName())
+            download.setPath(file_path)
+        
+        download.accept()
+        
+        def on_download_finished():
+            if download.state() == download.DownloadCompleted:
+                QMessageBox.information(self, "Download Complete", 
+                                    f"Downloaded: {download.suggestedFileName()}")
+            elif download.state() == download.DownloadInterrupted:
+                QMessageBox.warning(self, "Download Failed", 
+                                f"Failed to download: {download.suggestedFileName()}")
+        
+        download.finished.connect(on_download_finished)
 
     def perform_search(self, tab_id):
         if tab_id not in self.tab_data:
