@@ -1,4 +1,4 @@
-# CyberBrowser 🌐🔒
+# CyberBrowser
 
 A privacy-focused Python web browser with integrated Tor support for secure and anonymous browsing.
 
