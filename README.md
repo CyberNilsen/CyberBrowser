@@ -2,6 +2,8 @@
 
 A privacy-focused Python web browser with integrated Tor support for secure and anonymous browsing.
 
+![CyberBrowser](https://github.com/user-attachments/assets/f51f0848-04c2-4c81-9f97-767947f38e60)
+
 ## 🚀 Features
 
 ### Core Browser Features
